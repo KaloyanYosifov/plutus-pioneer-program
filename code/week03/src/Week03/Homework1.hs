@@ -15,22 +15,23 @@
 module Week03.Homework1 where
 
 import           Control.Monad        hiding (fmap)
-import           Data.Aeson           (ToJSON, FromJSON)
+import           Data.Aeson           (FromJSON, ToJSON)
 import           Data.Map             as Map
 import           Data.Text            (Text)
 import           Data.Void            (Void)
 import           GHC.Generics         (Generic)
-import           Plutus.Contract
-import qualified PlutusTx
-import           PlutusTx.Prelude     hiding (unless)
 import           Ledger               hiding (singleton)
+import           Ledger.Ada           as Ada
 import           Ledger.Constraints   (TxConstraints)
 import qualified Ledger.Constraints   as Constraints
 import qualified Ledger.Typed.Scripts as Scripts
-import           Ledger.Ada           as Ada
-import           Playground.Contract  (printJson, printSchemas, ensureKnownCurrencies, stage, ToSchema)
+import           Playground.Contract  (ToSchema, ensureKnownCurrencies,
+                                       printJson, printSchemas, stage)
 import           Playground.TH        (mkKnownCurrencies, mkSchemaDefinitions)
 import           Playground.Types     (KnownCurrency (..))
+import           Plutus.Contract
+import qualified PlutusTx
+import           PlutusTx.Prelude     hiding (unless)
 import           Prelude              (IO)
 import qualified Prelude              as P
 import           Text.Printf          (printf)
@@ -47,7 +48,28 @@ PlutusTx.unstableMakeIsData ''VestingDatum
 -- This should validate if either beneficiary1 has signed the transaction and the current slot is before or at the deadline
 -- or if beneficiary2 has signed the transaction and the deadline has passed.
 mkValidator :: VestingDatum -> () -> ScriptContext -> Bool
-mkValidator _ _ _ = False -- FIX ME!
+mkValidator dat () ctx = traceIfFalse "beneficiary's signature missing" can1Grab || can2Grab
+  where
+    info :: TxInfo
+    info = scriptContextTxInfo ctx
+
+    signedByBeneficiary1 :: Bool
+    signedByBeneficiary1 = txSignedBy info $ unPaymentPubKeyHash $ beneficiary1 dat
+
+    signedByBeneficiary2 :: Bool
+    signedByBeneficiary2 = txSignedBy info $ unPaymentPubKeyHash $ beneficiary2 dat
+
+    ben1NotReachedDeadline :: Bool
+    ben1NotReachedDeadline = contains (to $ deadline dat) $ txInfoValidRange info
+
+    ben2NotReachedDeadline :: Bool
+    ben2NotReachedDeadline = contains (from $ deadline dat) $ txInfoValidRange info
+
+    can1Grab :: Bool
+    can1Grab = signedByBeneficiary1 && ben1NotReachedDeadline
+
+    can2Grab :: Bool
+    can2Grab = signedByBeneficiary2 && ben2NotReachedDeadline
 
 data Vesting
 instance Scripts.ValidatorTypes Vesting where
@@ -114,7 +136,7 @@ grab = do
             lookups = Constraints.unspentOutputs utxos2 P.<>
                       Constraints.otherScript validator
             tx :: TxConstraints Void Void
-            tx      = mconcat [Constraints.mustSpendScriptOutput oref $ unitRedeemer | oref <- orefs] P.<>
+            tx      = mconcat [Constraints.mustSpendScriptOutput oref unitRedeemer | oref <- orefs] P.<>
                       Constraints.mustValidateIn (from now)
         void $ submitTxConstraintsWith @Void lookups tx
   where
